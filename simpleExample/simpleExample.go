@@ -345,7 +345,7 @@ func main() {
 	serialDeviceFileName := string(*pSerialDevice)
 	if serialDeviceFileName == "" {
 		fmt.Printf("Please define serial device. (-h for help)\nList of serial ports\n")
-		proped, _ := listserialports.ProbeSerialports()
+		proped, _ := listserialports.Probe()
 		for _, ser := range proped {
 			fmt.Printf(ser.ToPrintoutFormat())
 		}

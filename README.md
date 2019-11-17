@@ -62,8 +62,10 @@ func interactiveMode(deviceFile string, devId uint16) error {
 from "simple example". And google sds011 datasheet for further technical details
 
 # Simulator
-This package includes also crude sds011 sensor simulator program. Simulate sensor without filling that with dust.
-It hosts its own user interface for simulated sensor. Simulator allows to simulate also error modes. Like disconnecting RX wire
+This package includes also crude sds011 sensor simulator program.
+It hosts its own user interface for simulated sensor.
+
+Simulator allows to simulate also error modes. Like disconnecting RX wire
 or bad RS485 driver (echo 0 when direction changes etc...). Or bytes from other communication protocols moving in wires while there is no need for sds011 (bad design)
 
 For using simulator on pc without sensor, you need real rs232 loopback cables from port to port or use two usb-ttl cables in usb-ttl-ttl-usb config.

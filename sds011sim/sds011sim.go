@@ -30,7 +30,7 @@ func main() {
 	if serialDeviceFileName == "" {
 		fmt.Printf("Please define serial device. (-h for help)\nList of serial ports\n")
 
-		proped, errProbing := listserialports.ProbeSerialports()
+		proped, errProbing := listserialports.Probe()
 		if errProbing != nil {
 			fmt.Printf("Error probing serial port %v", errProbing.Error())
 			os.Exit(-1)
