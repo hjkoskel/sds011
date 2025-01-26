@@ -30,13 +30,13 @@ func main() {
 	if serialDeviceFileName == "" {
 		fmt.Printf("Please define serial device. (-h for help)\nList of serial ports\n")
 
-		proped, errProbing := listserialports.Probe()
+		proped, errProbing := listserialports.Probe(false)
 		if errProbing != nil {
 			fmt.Printf("Error probing serial port %v", errProbing.Error())
 			os.Exit(-1)
 		}
 		for _, ser := range proped {
-			fmt.Printf(ser.ToPrintoutFormat())
+			fmt.Print(ser.ToPrintoutFormat())
 		}
 		os.Exit(0)
 	}
@@ -59,8 +59,7 @@ func main() {
 	modelUpdates := make(chan SensorModel, 3)
 	statusChanges := make(chan SensorModelStatus, 3) //Update UI
 
-	packetsFromSensor := make(chan sds011.SDS011Packet, 6)
-	packetsToSensor := make(chan sds011.SDS011Packet, 6)
+	//packetsToSensor := make(chan sds011.SDS011Packet, 6)
 
 	/*
 		go func() {
@@ -76,9 +75,8 @@ func main() {
 		}()
 	*/
 
-	serialLink, errLink := sds011.InitializeSerialLink(*pSerialDevice,
-		packetsToSensor, sds011.SDS011TOSENSORSIZE,
-		packetsFromSensor, sds011.SDS011FROMSENSORSIZE)
+	serialLink, errLink := sds011.CreateLinuxSerial(*pSerialDevice)
+
 	if errLink != nil {
 		fmt.Printf("SERIAL LINK FAIL %v\n", errLink.Error())
 		return
@@ -96,40 +94,45 @@ func main() {
 			bytArr := <-simsensor.Output
 
 			color.Set(color.FgCyan)
-			fmt.Printf("to serial: %#X\n", bytArr)
+			fmt.Printf("to serial : %#X\n", bytArr)
 			color.Unset()
 
-			n, errWrite := serialLink.Serialport.Write(bytArr) //Should write all in one pass
+			errWrite := serialLink.SendBytes(bytArr) //Using sendBytes
+			//n, errWrite := serialLink.Serialport.Write(bytArr) //Should write all in one pass
 			if errWrite != nil {
 				fmt.Printf("Error writing %v\n", errWrite.Error())
-			} else {
-				if n != len(bytArr) {
-					fmt.Printf("TODO HANDLE NON COMPLETE WRITE got %v wrote only %v", len(bytArr), n)
-				}
 			}
 		}
 	}()
 
 	go func() { //allows to capture and print debug here :)
 		for {
-			msg := <-packetsToSensor //serialLink.Recieving
-			color.Set(color.FgGreen)
-			fmt.Printf("Recieved request %v (write to %v/%v)\n", msg.ToString(), len(simsensor.Input), cap(simsensor.Input))
-			color.Unset()
+			msg, errMsg := serialLink.Recieve()
+			if errMsg != nil {
+				fmt.Printf("ERR RECIEVING %s\n", errMsg)
+				os.Exit(-1)
+			}
+			if msg != nil {
+				//msg := <-packetsToSensor //serialLink.Recieving
+				color.Set(color.FgGreen)
+				fmt.Printf("Recieved request %s (write to %v/%v)\n", msg, len(simsensor.Input), cap(simsensor.Input))
+				color.Unset()
 
-			simsensor.Input <- msg
+				simsensor.Input <- *msg
+			}
 		}
 	}()
 
-	go func() {
-		serialRunErr := serialLink.Run()
-		if serialRunErr != nil {
-			fmt.Printf("SERIAL LINK FAIL %v\n", serialRunErr.Error())
-		} else {
-			fmt.Printf("Serial link failed without any explanation\n")
-		}
-		os.Exit(-1)
-	}()
+	/*
+		go func() {
+			serialRunErr := serialLink.Run()
+			if serialRunErr != nil {
+				fmt.Printf("SERIAL LINK FAIL %v\n", serialRunErr.Error())
+			} else {
+				fmt.Printf("Serial link failed without any explanation\n")
+			}
+			os.Exit(-1)
+		}()*/
 
 	modelUpdateBySerial := make(chan SensorModel, 3)
 	modelUpdateBySerial <- simsensor.Model

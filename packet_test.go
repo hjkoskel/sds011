@@ -32,9 +32,9 @@ func TestPacketExtract(t *testing.T) {
 	}
 
 	pack = NewPacket_DataReply(123, 0xABCD, 0x1234)
-	measRes, _ := pack.GetMeasurement()
+	measRes, measResErr := pack.GetMeasurement()
 	if (measRes.SmallReg != 0xABCD) || (measRes.LargeReg != 0x1234) {
-		t.Errorf("invalid meas res resp %#v", measRes)
+		t.Errorf("invalid meas res resp %#v packet:%#v err:%s", measRes, pack, measResErr)
 	}
 
 	pack = NewPacket_SetQueryModeReply(333, true, true)
@@ -63,8 +63,8 @@ func ByteArrayIsEqual(a []byte, b []byte) bool {
 	return true
 }
 
-//Packet conversions from document. "nails down" to something real
-//Datasheet examples are valuable as gold. Even they feel stupid
+// Packet conversions from document. "nails down" to something real
+// Datasheet examples are valuable as gold. Even they feel stupid
 func TestPacketConversionsFromDoc(t *testing.T) {
 	/*
 		PC sends command, query the current working mode:
@@ -290,7 +290,7 @@ func TestPacketConversionsFromDoc(t *testing.T) {
 }
 
 func TestPacketConversions(t *testing.T) {
-	testPackets := []SDS011Packet{
+	testPackets := []Packet{
 		NewPacket_SetQueryMode(0xFFFF, true, true),
 		NewPacket_SetQueryModeReply(0xFFFF, true, false),
 		NewPacket_QueryData(0xFFFF),
@@ -327,7 +327,7 @@ func TestPacketConversions(t *testing.T) {
 		/*SDS011TOSENSORSIZE   = 19
 		SDS011FROMSENSORSIZE = 10*/
 
-		var pack2 SDS011Packet
+		var pack2 Packet
 		parseErr := pack2.FromBytes(0, byteArr)
 		if parseErr != nil {
 			t.Errorf("PARSING ERROR %v\n", parseErr.Error())

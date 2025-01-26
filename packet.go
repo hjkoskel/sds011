@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-//Get optimized serial transmit by exact packet size
+// Get optimized serial transmit by exact packet size
 const (
 	SDS011TOSENSORSIZE   = 19
 	SDS011FROMSENSORSIZE = 10
@@ -37,7 +37,7 @@ const ( //
 	FUNNUMBER_VERSION       = 7
 )
 
-type SDS011Packet struct {
+type Packet struct {
 	CommandID byte
 	DeviceID  uint16
 	Checksum  byte
@@ -46,11 +46,11 @@ type SDS011Packet struct {
 	Valid     bool  //Is ok or not
 }
 
-func (p *SDS011Packet) MatchToId(id uint16) bool {
+func (p *Packet) MatchToId(id uint16) bool {
 	return p.DeviceID == id || id == ANYDEVICE || (p.DeviceID == ANYDEVICE) //works for sim and client
 }
 
-func (p *SDS011Packet) ToString() string {
+func (p Packet) String() string {
 	if !p.Valid {
 		return fmt.Sprintf("INVALID PACKET %X\n", p.ToBytes())
 	}
@@ -117,7 +117,7 @@ func (p *SDS011Packet) ToString() string {
 	return result
 }
 
-func (p *SDS011Packet) CalcChecksum() byte {
+func (p *Packet) CalcChecksum() byte {
 	result := byte(p.DeviceID & 0xFF)
 	result += byte(p.DeviceID / 256)
 	for _, b := range p.Data {
@@ -126,11 +126,11 @@ func (p *SDS011Packet) CalcChecksum() byte {
 	return result
 }
 
-func (p *SDS011Packet) ChecksumOk() bool {
+func (p *Packet) ChecksumOk() bool {
 	return p.Checksum == p.CalcChecksum()
 }
 
-func (p *SDS011Packet) ToBytes() []byte {
+func (p *Packet) ToBytes() []byte {
 	p.Checksum = p.CalcChecksum()
 	result := []byte{SDS011PACKETSTART, p.CommandID}
 	result = append(result, p.Data...)
@@ -138,7 +138,7 @@ func (p *SDS011Packet) ToBytes() []byte {
 	return append(result, tail...)
 }
 
-//trims line noise away
+// trims line noise away
 func trimToPacketStart(input []byte) []byte {
 	result := []byte{}
 	for iStart, v := range input {
@@ -149,14 +149,28 @@ func trimToPacketStart(input []byte) []byte {
 	return result
 }
 
-//Require packet starting with 0xAA and end 0xAB  Remember to add uptime here. (exact timestamp)
-func (p *SDS011Packet) FromBytes(uptimeNow int64, arr []byte) error {
+func EnoughBytes(arr []byte) bool {
+	n := len(arr)
+
+	if n < SDS011FROMSENSORSIZE {
+		return false //Can not be less than this
+	}
+
+	if SDS011TOSENSORSIZE <= n {
+		return true //Totally enough
+	}
+	//if shorter case
+	return arr[SDS011FROMSENSORSIZE-1] == SDS011PACKETSTOP
+}
+
+// Require packet starting with 0xAA and end 0xAB  Remember to add uptime here. (exact timestamp)
+func (p *Packet) FromBytes(uptimeNow int64, arr []byte) error {
 	p.Uptime = uptimeNow
 	p.Valid = false
 	arr = trimToPacketStart(arr)
 
 	if len(arr) < SDS011FROMSENSORSIZE {
-		return fmt.Errorf("Invalid data size=%v at least %v requred", len(arr), SDS011FROMSENSORSIZE)
+		return fmt.Errorf("invalid data size=%v at least %v requred", len(arr), SDS011FROMSENSORSIZE)
 	}
 	//Is larger packet? Check that first
 	if SDS011FROMSENSORSIZE <= len(arr) {
@@ -172,18 +186,18 @@ func (p *SDS011Packet) FromBytes(uptimeNow int64, arr []byte) error {
 	}
 
 	if (len(arr) != SDS011FROMSENSORSIZE) && (len(arr) != SDS011TOSENSORSIZE) {
-		return fmt.Errorf("Invalid data size %v", len(arr))
+		return fmt.Errorf("invalid data size %v", len(arr))
 	}
 	if arr[0] != 0xAA {
-		return fmt.Errorf("Invalid packet header %X", arr[0])
+		return fmt.Errorf("invalid packet header %X", arr[0])
 	}
 	if arr[len(arr)-1] != SDS011PACKETSTOP {
-		return fmt.Errorf("Invalid packet termination %X", arr[len(arr)-1])
+		return fmt.Errorf("invalid packet termination %X", arr[len(arr)-1])
 	}
 	p.CommandID = arr[1]
 
 	if p.CommandID != COMMANDID_CMD && p.CommandID != COMMANDID_RESPONSE && p.CommandID != COMMANDID_DATAREPLY {
-		return fmt.Errorf("Command ID 0x%X is not supported", p.CommandID)
+		return fmt.Errorf("command ID 0x%X is not supported", p.CommandID)
 	}
 
 	p.Checksum = arr[len(arr)-2]
@@ -194,45 +208,45 @@ func (p *SDS011Packet) FromBytes(uptimeNow int64, arr []byte) error {
 	switch p.CommandID {
 	case COMMANDID_CMD:
 		if len(arr) != 19 {
-			return fmt.Errorf("Expect 19 long packet for commandID %v", COMMANDID_CMD)
+			return fmt.Errorf("expect 19 long packet for commandID %v", COMMANDID_CMD)
 		}
 
 		switch p.Data[0] {
 		case FUNNUMBER_REPORTINGMODE, FUNNUMBER_QUERYDATA, FUNNUMBER_SETID, FUNNUMBER_SLEEPWORK, FUNNUMBER_PERIOD, FUNNUMBER_VERSION:
 			//OK
 		default:
-			return fmt.Errorf("Function %v not supportd with commandID 0x%X", p.Data[0], p.CommandID)
+			return fmt.Errorf("function %v not supportd with commandID 0x%X", p.Data[0], p.CommandID)
 		}
 
 	case COMMANDID_RESPONSE:
 		if len(arr) != 10 {
-			return fmt.Errorf("Expect 10 long packet for commandID %v", COMMANDID_RESPONSE)
+			return fmt.Errorf("expect 10 long packet for commandID %v", COMMANDID_RESPONSE)
 		}
 		//LACKS: FUNNUMBER_QUERYDATA
 		switch p.Data[0] {
 		case FUNNUMBER_REPORTINGMODE, FUNNUMBER_SETID, FUNNUMBER_SLEEPWORK, FUNNUMBER_PERIOD, FUNNUMBER_VERSION:
 			//OK
 		default:
-			return fmt.Errorf("Function %v not supportd with commandID 0x%X", p.Data[0], p.CommandID)
+			return fmt.Errorf("function %v not supportd with commandID 0x%X", p.Data[0], p.CommandID)
 		}
 
 	case COMMANDID_DATAREPLY:
 		if len(arr) != 10 {
-			return fmt.Errorf("Expect 10 long packet for commandID %v", COMMANDID_DATAREPLY)
+			return fmt.Errorf("expect 10 long packet for commandID %v", COMMANDID_DATAREPLY)
 		}
 
 	default:
-		return fmt.Errorf("Invalid command id %v", p.CommandID)
+		return fmt.Errorf("invalid command id %v", p.CommandID)
 	}
 
 	if !p.ChecksumOk() {
-		return fmt.Errorf("Checksum error")
+		return fmt.Errorf("checksum error")
 	}
 	p.Valid = true
 	return nil
 }
 
-func (p *SDS011Packet) ToDebugText() string { //Like in manual
+func (p *Packet) ToDebugText() string { //Like in manual
 	raw := p.ToBytes()
 	cmdIdLookup := map[byte]string{COMMANDID_CMD: "Query", COMMANDID_RESPONSE: "Response", COMMANDID_DATAREPLY: "datareply"}
 	result := fmt.Sprintf("--- %v ", cmdIdLookup[p.CommandID]+" ---\n")
@@ -256,8 +270,8 @@ Functions for creating packages
 Set data reporting mode
 */
 
-func NewPacket_SetQueryMode(deviceId uint16, write bool, query bool) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetQueryMode(deviceId uint16, write bool, query bool) Packet {
+	return Packet{
 		CommandID: COMMANDID_CMD,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_REPORTINGMODE, boolToByte(write), boolToByte(query), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -265,8 +279,8 @@ func NewPacket_SetQueryMode(deviceId uint16, write bool, query bool) SDS011Packe
 	}
 }
 
-func NewPacket_SetQueryModeReply(deviceId uint16, write bool, query bool) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetQueryModeReply(deviceId uint16, write bool, query bool) Packet {
+	return Packet{
 		CommandID: COMMANDID_RESPONSE,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_REPORTINGMODE, boolToByte(write), boolToByte(query), 0},
@@ -274,17 +288,15 @@ func NewPacket_SetQueryModeReply(deviceId uint16, write bool, query bool) SDS011
 	}
 }
 
-func (p *SDS011Packet) GetQueryMode() (bool, error) {
-	if !p.Valid {
-		return false, fmt.Errorf("Invalid packet")
-	}
-	if p.Data[0] != FUNNUMBER_REPORTINGMODE {
-		return false, fmt.Errorf("Function number is not %v, it is %v", FUNNUMBER_REPORTINGMODE, p.Data[0])
+func (p *Packet) GetQueryMode() (bool, error) {
+	err := p.checkFunctionNumberAndLen(FUNNUMBER_REPORTINGMODE, 3)
+	if err != nil {
+		return false, err
 	}
 	return 0 < p.Data[2], nil
 }
 
-func (p *SDS011Packet) GetIsWrite() bool { //Some commands have write and read modes
+func (p *Packet) GetIsWrite() bool { //Some commands have write and read modes
 	f := p.Data[0]
 	if (f == FUNNUMBER_REPORTINGMODE) || (f == FUNNUMBER_SLEEPWORK) || (f == FUNNUMBER_PERIOD) {
 		return 0 < p.Data[1]
@@ -296,8 +308,8 @@ func (p *SDS011Packet) GetIsWrite() bool { //Some commands have write and read m
 Query data command
 */
 
-func NewPacket_QueryData(deviceId uint16) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_QueryData(deviceId uint16) Packet {
+	return Packet{
 		CommandID: COMMANDID_CMD,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_QUERYDATA, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -305,20 +317,13 @@ func NewPacket_QueryData(deviceId uint16) SDS011Packet {
 	}
 }
 
-func NewPacket_DataReply(deviceId uint16, pm2_5 uint16, pm10 uint16) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_DataReply(deviceId uint16, pm2_5 uint16, pm10 uint16) Packet {
+	return Packet{
 		CommandID: COMMANDID_DATAREPLY,
 		DeviceID:  deviceId,
 		Data:      []byte{byte(pm2_5 & 0xFF), byte(pm2_5 >> 8), byte(pm10 & 0xFF), byte(pm10 >> 8)},
 		Valid:     true,
 	}
-}
-
-type Sds011Result struct {
-	MeasurementCounter int
-	Uptime             int64
-	SmallReg           uint16
-	LargeReg           uint16
 }
 
 func millisecToString(ms int64) string {
@@ -337,19 +342,15 @@ func millisecToString(ms int64) string {
 	return strings.Join(toks, " ")
 }
 
-//NOTICE: non calibrated values, used for debug
-func (p *Sds011Result) ToString() string {
-	return fmt.Sprintf("count=%v %v PM2.5= %.1fµm/m³ PM10= %.1fµm/m³", p.MeasurementCounter, millisecToString(p.Uptime), float64(p.SmallReg)/10, float64(p.LargeReg)/10)
-}
-
-func (p *SDS011Packet) GetMeasurement() (Sds011Result, error) {
+func (p *Packet) GetMeasurement() (Result, error) {
 	if !p.Valid {
-		return Sds011Result{}, fmt.Errorf("Invalid packet")
+		return Result{}, fmt.Errorf("invalid packet")
 	}
 	if p.CommandID != COMMANDID_DATAREPLY {
-		return Sds011Result{}, fmt.Errorf("Not measurement packet commandid=%v", p.CommandID)
+		return Result{}, fmt.Errorf("not measurement packet commandid=%v", p.CommandID)
 	}
-	return Sds011Result{
+
+	return Result{
 		Uptime:   p.Uptime,
 		SmallReg: uint16(p.Data[0]) + uint16(p.Data[1])*256,
 		LargeReg: uint16(p.Data[2]) + uint16(p.Data[3])*256,
@@ -360,16 +361,16 @@ func (p *SDS011Packet) GetMeasurement() (Sds011Result, error) {
 /*
 Set device id.  DO NOT USE. Unless really wanted
 */
-func NewPacket_SetId(deviceId uint16, newDeviceId uint16) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetId(deviceId uint16, newDeviceId uint16) Packet {
+	return Packet{
 		CommandID: COMMANDID_CMD,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_SETID, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, byte(newDeviceId >> 8), byte(newDeviceId & 0xFF)},
 		Valid:     true,
 	}
 }
-func NewPacket_SetIdReply(deviceId uint16) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetIdReply(deviceId uint16) Packet {
+	return Packet{
 		CommandID: COMMANDID_RESPONSE,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_SETID, 0, 0, 0},
@@ -377,12 +378,10 @@ func NewPacket_SetIdReply(deviceId uint16) SDS011Packet {
 	}
 }
 
-func (p *SDS011Packet) GetSetId() (uint16, error) {
-	if p.Data[0] != FUNNUMBER_SETID {
-		return 0, fmt.Errorf("Function number is not SETID")
-	}
-	if len(p.Data) < 12 {
-		return 0, fmt.Errorf("Invalid data length o SETID packet")
+func (p *Packet) GetSetId() (uint16, error) {
+	err := p.checkFunctionNumberAndLen(FUNNUMBER_SETID, 12)
+	if err != nil {
+		return 0, err
 	}
 	if p.CommandID == COMMANDID_CMD {
 		return uint16(p.Data[11])<<8 + uint16(p.Data[12]), nil
@@ -390,14 +389,14 @@ func (p *SDS011Packet) GetSetId() (uint16, error) {
 	if p.CommandID == COMMANDID_RESPONSE {
 		return p.DeviceID, nil
 	}
-	return 0, fmt.Errorf("Invalid commandID %X", p.CommandID)
+	return 0, fmt.Errorf("invalid commandID %X", p.CommandID)
 }
 
 /*
 4)Set device sleep work time
 */
-func NewPacket_SetWorkMode(deviceId uint16, write bool, work bool) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetWorkMode(deviceId uint16, write bool, work bool) Packet {
+	return Packet{
 		CommandID: COMMANDID_CMD,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_SLEEPWORK, boolToByte(write), boolToByte(work), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -405,8 +404,8 @@ func NewPacket_SetWorkMode(deviceId uint16, write bool, work bool) SDS011Packet 
 	}
 }
 
-func NewPacket_SetWorkModeReply(deviceId uint16, write bool, work bool) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetWorkModeReply(deviceId uint16, write bool, work bool) Packet {
+	return Packet{
 		CommandID: COMMANDID_RESPONSE,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_SLEEPWORK, boolToByte(write), boolToByte(work), 0},
@@ -414,27 +413,33 @@ func NewPacket_SetWorkModeReply(deviceId uint16, write bool, work bool) SDS011Pa
 	}
 }
 
-//Assuming valid packet (it have data, only valid function)
-func (p *SDS011Packet) GetWorkMode() (bool, error) {
-	if !p.Valid {
-		return false, fmt.Errorf("Invalid packet")
-	}
-	/*
-		if p.CommandID != COMMANDID_RESPONSE {
-			return false, fmt.Errorf("Packet is not response")
-		}
-	*/
-	if p.Data[0] != FUNNUMBER_SLEEPWORK {
-		return false, fmt.Errorf("Function number is not %v, it is %v", FUNNUMBER_SLEEPWORK, p.Data[0])
+// Assuming valid packet (it have data, only valid function)
+func (p *Packet) GetWorkMode() (bool, error) {
+	err := p.checkFunctionNumberAndLen(FUNNUMBER_SLEEPWORK, 3)
+	if err != nil {
+		return false, err
 	}
 	return 0 < p.Data[2], nil
+}
+
+func (p *Packet) checkFunctionNumberAndLen(fun byte, minlength int) error {
+	if !p.Valid {
+		return fmt.Errorf("invalid packet")
+	}
+	if len(p.Data) < minlength {
+		return fmt.Errorf("data length %v under %v", len(p.Data), minlength)
+	}
+	if p.Data[0] != fun {
+		return fmt.Errorf("function number is not %v, it is %v", fun, p.Data[0])
+	}
+	return nil
 }
 
 /*
 Set working period
 */
-func NewPacket_SetPeriod(deviceId uint16, write bool, period byte) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetPeriod(deviceId uint16, write bool, period byte) Packet {
+	return Packet{
 		CommandID: COMMANDID_CMD,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_PERIOD, boolToByte(write), period, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -442,8 +447,8 @@ func NewPacket_SetPeriod(deviceId uint16, write bool, period byte) SDS011Packet 
 	}
 }
 
-func NewPacket_SetPeriodReply(deviceId uint16, write bool, period byte) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_SetPeriodReply(deviceId uint16, write bool, period byte) Packet {
+	return Packet{
 		CommandID: COMMANDID_RESPONSE,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_PERIOD, boolToByte(write), period, 0},
@@ -451,17 +456,10 @@ func NewPacket_SetPeriodReply(deviceId uint16, write bool, period byte) SDS011Pa
 	}
 }
 
-func (p *SDS011Packet) GetPeriod() (byte, error) {
-	if !p.Valid {
-		return 0, fmt.Errorf("Invalid packet")
-	}
-	/*
-		if p.CommandID != COMMANDID_RESPONSE {
-			return 0, fmt.Errorf("Packet is not response")
-		}
-	*/
-	if p.Data[0] != FUNNUMBER_PERIOD {
-		return 0, fmt.Errorf("Function number is not %v, it is %v", FUNNUMBER_PERIOD, p.Data[0])
+func (p *Packet) GetPeriod() (byte, error) {
+	err := p.checkFunctionNumberAndLen(FUNNUMBER_PERIOD, 3)
+	if err != nil {
+		return 0, err
 	}
 	return p.Data[2], nil
 }
@@ -469,8 +467,8 @@ func (p *SDS011Packet) GetPeriod() (byte, error) {
 /*
 Version
 */
-func NewPacket_QueryVersion(deviceId uint16) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_QueryVersion(deviceId uint16) Packet {
+	return Packet{
 		CommandID: COMMANDID_CMD,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_VERSION, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -478,8 +476,8 @@ func NewPacket_QueryVersion(deviceId uint16) SDS011Packet {
 	}
 }
 
-func NewPacket_QueryVersionReply(deviceId uint16, year byte, month byte, day byte) SDS011Packet {
-	return SDS011Packet{
+func NewPacket_QueryVersionReply(deviceId uint16, year byte, month byte, day byte) Packet {
+	return Packet{
 		CommandID: COMMANDID_RESPONSE,
 		DeviceID:  deviceId,
 		Data:      []byte{FUNNUMBER_VERSION, year, month, day},
@@ -487,12 +485,12 @@ func NewPacket_QueryVersionReply(deviceId uint16, year byte, month byte, day byt
 	}
 }
 
-func (p *SDS011Packet) GetVersionString() (string, error) {
+func (p *Packet) GetVersionString() (string, error) {
 	if !p.Valid {
-		return "", fmt.Errorf("Invalid packet")
+		return "", fmt.Errorf("invalid packet")
 	}
 	if p.Data[0] != FUNNUMBER_VERSION {
-		return "", fmt.Errorf("Function number is not %v, it is %v", FUNNUMBER_VERSION, p.Data[0])
+		return "", fmt.Errorf("function number is not %v, it is %v", FUNNUMBER_VERSION, p.Data[0])
 	}
 	return fmt.Sprintf("%v.%v.%v", p.Data[1], p.Data[2], p.Data[3]), nil
 }

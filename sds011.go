@@ -12,23 +12,22 @@ const (
 )
 
 type Sds011 struct {
-	PassiveMode    bool //Only listen
-	SettingsInSync bool //If flips to offline (timeout etc... require settings check)
+	PassiveMode bool //Only listen
+	//SettingsInSync bool //If flips to offline (timeout etc... require settings check)
 
-	Id              uint16         //Listen only these messages
-	settings        Sds011Settings //Change thru method
-	settingsChanged bool           //internal set true if settings were set even once.  false= just read now, change maybe later
+	Id       uint16         //Listen only these messages
+	settings Sds011Settings //Change thru method
 
 	//Channels for reporting spontanious things
-	resultCh       chan Sds011Result
+	resultCh       chan Result
 	ErrorsCh       chan error  //Push nil if recovered or came online
 	DetectedSensor chan uint16 //In case of multiple sensors. add item here when found valid package with new ID
 
 	//Low level interface
-	toSensor   chan SDS011Packet
-	fromSensor chan SDS011Packet
+	conn Conn
+
 	//Internal channels. Important to split inlet channels.. detecting reply is going to be much easier with this
-	filtreplyFromSensor chan SDS011Packet
+	filtreplyFromSensor chan Packet
 
 	tPrevResultTime time.Time //How long since data
 
@@ -51,14 +50,17 @@ func (p *Sds011Settings) PeriodDuration() time.Duration {
 	return time.Minute * time.Duration(p.Period)
 }
 
-func InitSds011(Id uint16, passive bool, toSensorCh chan SDS011Packet, fromSensorCh chan SDS011Packet, resultCh chan Sds011Result, initialMeasurementCounter int) Sds011 {
+func InitSds011(Id uint16, passive bool, conn Conn, resultCh chan Result, initialMeasurementCounter int) Sds011 {
 	result := Sds011{
-		PassiveMode:         passive,
-		Id:                  Id,
-		settings:            Sds011Settings{},
-		toSensor:            toSensorCh,
-		fromSensor:          fromSensorCh,
-		filtreplyFromSensor: make(chan SDS011Packet, 1), //Just passing thru
+		PassiveMode: passive,
+		Id:          Id,
+		settings:    Sds011Settings{},
+
+		/*toSensor:            toSensorCh,
+		fromSensor:          fromSensorCh,*/
+		conn: conn,
+
+		filtreplyFromSensor: make(chan Packet, 1), //Just passing thru
 		resultCh:            resultCh,
 		ErrorsCh:            make(chan error, 2), //Optional... get error info from here
 		DetectedSensor:      make(chan uint16, 10),
@@ -70,24 +72,31 @@ func InitSds011(Id uint16, passive bool, toSensorCh chan SDS011Packet, fromSenso
 	return result
 }
 
-//For reading and writing settings. Data query is different
-func (p *Sds011) queryAndWaitResponse(query SDS011Packet) (SDS011Packet, error) {
+// For reading and writing settings. Data query is different
+func (p *Sds011) queryAndWaitResponse(query Packet) (Packet, error) {
 	for 0 < len(p.filtreplyFromSensor) {
 		<-p.filtreplyFromSensor //Clear up
 	}
-	for 0 < len(p.toSensor) {
-		<-p.toSensor //Clear up
-	}
+	/*
+		for 0 < len(p.toSensor) {
+			<-p.toSensor //Clear up
+		}*/
 
 	if !p.powerEnable {
-		return SDS011Packet{}, fmt.Errorf("Power line not enabled") //Internal mess up if software makes queries while sensor is disabled
+		return Packet{}, fmt.Errorf("power line not enabled") //Internal mess up if software makes queries while sensor is disabled
 	}
 
-	p.toSensor <- query
+	//p.toSensor <- query
+	sendErr := p.conn.Send(query)
+	if sendErr != nil {
+		return Packet{}, sendErr
+	}
+
 	tStart := time.Now()
 	for time.Since(tStart) < time.Millisecond*TIMEOUTRESPONSE {
 		if 0 < len(p.filtreplyFromSensor) {
 			reply := <-p.filtreplyFromSensor
+			//fmt.Printf("GOT REPLY %s\n", reply)
 			if reply.CommandID == COMMANDID_RESPONSE { //Ignore other stuff. Like shorted rx tx echo back etc...
 				return reply, nil
 			}
@@ -95,11 +104,11 @@ func (p *Sds011) queryAndWaitResponse(query SDS011Packet) (SDS011Packet, error) 
 		time.Sleep(50 * time.Millisecond) //granularity
 	}
 	//TIMEOUT
-	p.SettingsInSync = false
-	return SDS011Packet{}, fmt.Errorf("timeout")
+	//p.SettingsInSync = false
+	return Packet{}, fmt.Errorf("timeout %s", time.Since(tStart))
 }
 
-//If system have hiside power enable for sensor
+// If system have hiside power enable for sensor
 func (p *Sds011) PowerLine(enabled bool) {
 	if !p.powerEnable && enabled {
 		//Switching on
@@ -122,7 +131,7 @@ func (p *Sds011) readQueryMode() (bool, error) {
 
 func (p *Sds011) writeQueryMode(queryMode bool) error {
 	if p.PassiveMode {
-		return fmt.Errorf("Write not allowed in passive mode")
+		return fmt.Errorf("write not allowed in passive mode")
 	}
 
 	workModeReply, replyErr := p.queryAndWaitResponse(NewPacket_SetQueryMode(p.Id, true, queryMode))
@@ -134,7 +143,7 @@ func (p *Sds011) writeQueryMode(queryMode bool) error {
 		return err
 	}
 	if resp != queryMode {
-		return fmt.Errorf("Setting query mode to %v failed", queryMode)
+		return fmt.Errorf("setting query mode to %v failed", queryMode)
 	}
 	return nil
 }
@@ -148,7 +157,7 @@ func (p *Sds011) readPeriod() (byte, error) {
 }
 func (p *Sds011) writePeriod(period byte) error {
 	if p.PassiveMode {
-		return fmt.Errorf("Write not allowed in passive mode")
+		return fmt.Errorf("write not allowed in passive mode")
 	}
 
 	periodReply, replyErr := p.queryAndWaitResponse(NewPacket_SetPeriod(p.Id, true, period))
@@ -173,7 +182,7 @@ func (p *Sds011) readVersion() (string, error) {
 	return versionReply.GetVersionString()
 }
 
-//Read what is going on device. Call if wanted
+// Read what is going on device. Call if wanted
 func (p *Sds011) readSettings() (Sds011Settings, error) {
 	queryMode, queryModeErr := p.readQueryMode()
 	if queryModeErr != nil {
@@ -190,11 +199,10 @@ func (p *Sds011) readSettings() (Sds011Settings, error) {
 	return Sds011Settings{QueryMode: queryMode, Period: period, Version: version}, nil
 }
 
-//Response comes from result channel  TODO Timeout checking?
+// Response comes from result channel  TODO Timeout checking?
 func (p *Sds011) DoQuery() error {
 	pkg := NewPacket_QueryData(p.Id)
-	p.toSensor <- pkg
-	return nil
+	return p.conn.Send(pkg)
 }
 
 //IS NOT RECOMMENDED... makes things messy. It is unique from factory
@@ -211,19 +219,19 @@ func (p *Sds011) ChangeID(newId byte) error {
 func (p *Sds011) ChangeToWork(toWork bool) error {
 	reply, replyErr := p.queryAndWaitResponse(NewPacket_SetWorkMode(p.Id, true, toWork))
 	if replyErr != nil {
-		return fmt.Errorf("Change to work failed with %v\n", replyErr.Error())
+		return fmt.Errorf("change to work failed with %v", replyErr.Error())
 	}
 	target, errGetWork := reply.GetWorkMode()
 	if errGetWork != nil {
 		return errGetWork
 	}
 	if target != toWork {
-		return fmt.Errorf("Changing work to %v failed", toWork)
+		return fmt.Errorf("changing work to %v failed", toWork)
 	}
 	return nil
 }
 
-//Not like working/broken.... it means working not sleeping
+// Not like working/broken.... it means working not sleeping
 func (p *Sds011) IsWorking() (bool, error) {
 	reply, replyErr := p.queryAndWaitResponse(NewPacket_SetWorkMode(p.Id, false, false))
 	if replyErr != nil {
@@ -232,40 +240,18 @@ func (p *Sds011) IsWorking() (bool, error) {
 	return reply.GetWorkMode()
 }
 
-/*
-Called after disconnect
-Also allows to query current (desired) settings... even sensor is offline.
-Or if it is online.. it returns what setting really is
-*/
-func (p *Sds011) SyncSettings() (Sds011Settings, error) {
-	if p.PassiveMode {
-		return p.settings, nil //No activity
+func (p *Sds011) SyncSettingsFromDevice() error {
+	st, err := p.readSettings()
+	if err != nil {
+		return err
 	}
-	if !p.settingsChanged { //DO not change just read what is going on sensor
-		var err error
-		p.settings, err = p.readSettings()
-		return p.settings, err
-	}
+	p.settings = st
+	return nil
+}
 
-	//Reads back.. if are same then no writing
-	onSensorSettings, errRead := p.readSettings()
-	if errRead != nil {
-		return p.settings, errRead
-	}
-	p.settings.Version = onSensorSettings.Version //Not really setting
-	if p.settings.Period != onSensorSettings.Period {
-		errWrite := p.writePeriod(p.settings.Period)
-		if errWrite != nil {
-			return p.settings, errWrite
-		}
-	}
-	if p.settings.QueryMode != onSensorSettings.QueryMode {
-		errWrite := p.writeQueryMode(p.settings.QueryMode)
-		if errWrite != nil {
-			return p.settings, errWrite
-		}
-	}
-	return p.settings, nil
+func (p *Sds011) GetSettings() (Sds011Settings, error) {
+	errSync := p.SyncSettingsFromDevice()
+	return p.settings, errSync
 }
 
 /*
@@ -273,89 +259,103 @@ Check situation first from sensor. Do not update if not needed, avoid re-flashin
 */
 func (p *Sds011) SetSettings(newSettings Sds011Settings) error {
 	if 30 < newSettings.Period {
-		return fmt.Errorf("Invalid period %v", newSettings.Period)
+		return fmt.Errorf("invalid period %v", newSettings.Period)
 	}
 
 	if p.PassiveMode {
-		return fmt.Errorf("Write not allowed in passive mode")
+		return fmt.Errorf("write not allowed in passive mode")
 	}
-	p.settingsChanged = true
 	p.settings = newSettings
+
+	//Read current settings and avoid flash wearout :)
+	onSensorSettings, errRead := p.readSettings()
+	if errRead != nil {
+		return errRead
+	}
+
+	if p.settings.Period != onSensorSettings.Period {
+		errWrite := p.writePeriod(p.settings.Period)
+		if errWrite != nil {
+			return errWrite
+		}
+	}
+	if p.settings.QueryMode != onSensorSettings.QueryMode {
+		errWrite := p.writeQueryMode(p.settings.QueryMode)
+		if errWrite != nil {
+			return errWrite
+		}
+	}
 	return nil
 }
 
-//Does reporting non-blocking way. If end user is not intrested errors :(
+// Does reporting non-blocking way. If end user is not intrested errors :(
 func (p *Sds011) reportError(err error) {
 	if len(p.ErrorsCh) <= cap(p.ErrorsCh) {
 		p.ErrorsCh <- err
 	}
 }
 
+func (p *Sds011) processFromSensor(pack Packet) error {
+	if !pack.Valid {
+		return fmt.Errorf("discarding packet. Should not happen bad implementation")
+	}
+
+	if !pack.MatchToId(p.Id) {
+		if len(p.DetectedSensor) < cap(p.DetectedSensor) {
+			p.DetectedSensor <- pack.DeviceID
+		}
+		return nil
+	}
+
+	if !p.powerEnable { //Power should be off. Failed power switch or bug in the software
+		p.reportError(fmt.Errorf("sensor switch fail, recieved packet %s", pack))
+	}
+	switch pack.CommandID {
+	case COMMANDID_DATAREPLY:
+		measResult, errMeas := pack.GetMeasurement()
+		if errMeas == nil {
+			//If enough since previous time. Then it is more than extra poll query
+			if p.settings.PeriodDuration().Seconds()-1 <= time.Since(p.tPrevResultTime).Seconds() {
+				if p.settings.QueryMode {
+					//On query mode. One must estimate how many periods have happend
+					//Even with the zero communication system can run
+					p.measurementCounter += int(math.Floor(time.Since(p.tPrevResultTime).Seconds() / p.settings.PeriodDuration().Seconds()))
+				} else {
+					p.measurementCounter++ //This is clearly the event. Spontanious sending is more accurate
+				}
+				p.tPrevResultTime = time.Now()
+			}
+
+			//Increase counter. Recieving data does not prove anything.
+
+			measResult.MeasurementCounter = p.measurementCounter
+			p.resultCh <- measResult
+		}
+	case COMMANDID_RESPONSE:
+		p.filtreplyFromSensor <- pack
+	case COMMANDID_CMD:
+		return fmt.Errorf("!!!! WARNING SDS011 is recieving in wrong way CMD %s possible RX-TX short", pack)
+
+	default: //Should not really happen. Packet filtered earlier in stage. Needed if bad message transfer implemention
+		return fmt.Errorf("should not happen bad message transfer implementation INVALID PACKET %v, DISCARDING", pack)
+	}
+	return nil
+}
+
 /*
-
  */
-func (p *Sds011) Run() {
-	go func() { //two state machine
-		for {
-			for !p.SettingsInSync {
-				time.Sleep(SYNCRETRYINTEVAL * time.Millisecond)
-				_, errSync := p.SyncSettings()
-				//Report
-				p.reportError(errSync)
-			}
-			for p.SettingsInSync {
-				time.Sleep(time.Second)
-			}
-		}
-	}()
-
-	//Handle input
+func (p *Sds011) Run() error {
 	for {
-		pack, ok := <-p.fromSensor
-		if !ok {
-			return //Channel closed
+		packet, errRecv := p.conn.Recieve()
+		if errRecv != nil {
+			return errRecv
 		}
-		if pack.MatchToId(p.Id) && pack.Valid {
-			if !p.powerEnable { //Power should be off. Failed power switch or bug in the software
-				p.ErrorsCh <- fmt.Errorf("Sensor switch fail, recieved packet %v", pack.ToString())
-			}
-			switch pack.CommandID {
-			case COMMANDID_DATAREPLY:
-				measResult, errMeas := pack.GetMeasurement()
-				if errMeas == nil {
-					//If enough since previous time. Then it is more than extra poll query
-					if p.settings.PeriodDuration().Seconds()-1 <= time.Since(p.tPrevResultTime).Seconds() {
-						if p.settings.QueryMode {
-							//On query mode. One must estimate how many periods have happend
-							//Even with the zero communication system can run
-							p.measurementCounter += int(math.Floor(time.Since(p.tPrevResultTime).Seconds() / p.settings.PeriodDuration().Seconds()))
-						} else {
-							p.measurementCounter++ //This is clearly the event. Spontanious sending is more accurate
-						}
-						p.tPrevResultTime = time.Now()
-					}
-
-					//Increase counter. Recieving data does not prove anything.
-
-					measResult.MeasurementCounter = p.measurementCounter
-					p.resultCh <- measResult
-				}
-			case COMMANDID_RESPONSE:
-				p.filtreplyFromSensor <- pack
-			case COMMANDID_CMD:
-				p.reportError(fmt.Errorf("!!!! WARNING SDS011 is recieving in wrong way CMD %v possible RX-TX short", pack.ToString()))
-
-			default: //Should not really happen. Packet filtered earlier in stage. Needed if bad message transfer implemention
-				p.reportError(fmt.Errorf("SHOULD NOT HAPPEN bad message transfer implementation INVALID PACKET %v, DISCARDING\n", pack.ToString()))
-			}
-		} else {
-			if pack.Valid {
-				if len(p.DetectedSensor) < cap(p.DetectedSensor) {
-					p.DetectedSensor <- pack.DeviceID
-				}
-			} else {
-				p.reportError(fmt.Errorf("Discarding packet. Should not happen bad implementation"))
+		if packet != nil {
+			errProcess := p.processFromSensor(*packet)
+			if errProcess != nil {
+				return errProcess
 			}
 		}
 	}
+
 }

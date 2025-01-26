@@ -3,15 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"github.com/gorilla/mux"
 )
 
-var modelledSensors []SimSensor
+//var modelledSensors []SimSensor
 
-//Single sensor server
+// Single sensor server
 func runSingleSensorHttpsServer(
 	modelUpdatedBySerial chan SensorModel, modelUpdatedByUser chan SensorModel, simStatusUpdating chan SensorModelStatus,
 	uiport int, httpsCrt string, httpsKey string) error {
@@ -46,7 +46,7 @@ func runSingleSensorHttpsServer(
 	r.HandleFunc("/model", func(w http.ResponseWriter, r *http.Request) {
 		//fmt.Printf("HANDLING QUERY %v\n", r.Method)
 		if r.Method == "POST" {
-			postbody, errRead := ioutil.ReadAll(r.Body)
+			postbody, errRead := io.ReadAll(r.Body)
 			if errRead != nil {
 				w.Write([]byte(fmt.Sprintf("Reading POST request failed %v", errRead.Error())))
 				w.WriteHeader(http.StatusBadRequest)

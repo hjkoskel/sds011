@@ -21,17 +21,18 @@ import (
 )
 
 type SimSensor struct {
-	Input             chan sds011.SDS011Packet
-	outputQueue       chan sds011.SDS011Packet //allows to do all kind of crazy things
-	Output            chan []byte              //Writes out burst of bytes
-	Model             SensorModel              //This is loaded, changed...stored etc..
+	Input       chan sds011.Packet
+	outputQueue chan sds011.Packet //allows to do all kind of crazy things
+	Output      chan []byte        //Writes out burst of bytes
+
+	Model             SensorModel //This is loaded, changed...stored etc..
 	SensorModelStatus SensorModelStatus
 }
 
 func InitSimSensor(id uint16) SimSensor {
 	result := SimSensor{
-		Input:       make(chan sds011.SDS011Packet, 10),
-		outputQueue: make(chan sds011.SDS011Packet, 10),
+		Input:       make(chan sds011.Packet, 10),
+		outputQueue: make(chan sds011.Packet, 10),
 		Output:      make(chan []byte, 10),
 	}
 	result.Model = SensorModel{Connectivity: ConnectivityModel{RxConnected: true, TxConnected: true}, PowerOn: true}
@@ -39,7 +40,7 @@ func InitSimSensor(id uint16) SimSensor {
 	return result
 }
 
-//Separate settings and status
+// Separate settings and status
 type SensorModelStatus struct {
 	Working            bool   `json:"working"`            //- working or sleep (depend on period and last time)
 	MeasurementCounter int    `json:"measurementCounter"` //- measurement counter (for sim)
@@ -107,12 +108,12 @@ func (p *SignalModel) Calc(t time.Time) float64 {
 	return math.Max(0, rand.Float64()*(p.Noise*2.0-1.0)+wave+p.Offset)
 }
 
-func (p *SimSensor) reactToPackage(pack sds011.SDS011Packet, sensorUpdating chan SensorModel) (sds011.SDS011Packet, error) {
+func (p *SimSensor) reactToPackage(pack sds011.Packet, sensorUpdating chan SensorModel) (sds011.Packet, error) {
 	if !pack.Valid { //Maybe this is tested in somewhere else beforehand
-		return sds011.SDS011Packet{}, fmt.Errorf("INVALID PACKET")
+		return sds011.Packet{}, fmt.Errorf("invalid packet")
 	}
 	if pack.CommandID != sds011.COMMANDID_CMD {
-		return sds011.SDS011Packet{}, fmt.Errorf("Simulator understands only commandId=0xB4")
+		return sds011.Packet{}, fmt.Errorf("simulator understands only commandId=0xB4")
 	}
 
 	write := pack.GetIsWrite()
@@ -130,7 +131,7 @@ func (p *SimSensor) reactToPackage(pack sds011.SDS011Packet, sensorUpdating chan
 		if write {
 			id, idErr := pack.GetSetId()
 			if idErr != nil {
-				return sds011.SDS011Packet{}, idErr
+				return sds011.Packet{}, idErr
 			}
 			p.Model.SensorMem.Id = id
 			p.SensorModelStatus.BurnEventCounter++ //Important to count memory wear out
@@ -149,7 +150,7 @@ func (p *SimSensor) reactToPackage(pack sds011.SDS011Packet, sensorUpdating chan
 		if write {
 			per, errPeriod := pack.GetPeriod() //TODO limit check
 			if errPeriod != nil {
-				return sds011.SDS011Packet{}, errPeriod
+				return sds011.Packet{}, errPeriod
 			}
 			p.Model.SensorMem.Period = per
 			p.SensorModelStatus.BurnEventCounter++ //Important to count memory wear out
@@ -160,14 +161,14 @@ func (p *SimSensor) reactToPackage(pack sds011.SDS011Packet, sensorUpdating chan
 		return sds011.NewPacket_QueryVersionReply(p.Model.SensorMem.Id, p.Model.SensorMem.VersionYear, p.Model.SensorMem.VersionMonth, p.Model.SensorMem.VersionDay), nil
 	}
 
-	return sds011.SDS011Packet{}, fmt.Errorf("Invalid function %v", pack.Data[0])
+	return sds011.Packet{}, fmt.Errorf("invalid function %v", pack.Data[0])
 }
 
 const (
 	INTERVALIDLECHARS = 1500
 )
 
-//Sends package based on ConnectivityModel
+// Sends package based on ConnectivityModel
 func (p *SimSensor) sendRoutine() {
 	lastTrashTime := time.Now()
 	for {
@@ -189,8 +190,8 @@ func (p *SimSensor) sendRoutine() {
 	}
 }
 
-//Trash signal only if needed
-func (p *ConnectivityModel) TrashSignal(pack sds011.SDS011Packet) []byte {
+// Trash signal only if needed
+func (p *ConnectivityModel) TrashSignal(pack sds011.Packet) []byte {
 	arr := pack.ToBytes()
 	if p.InvalidCRC {
 		arr[len(arr)-2] += 1
@@ -261,7 +262,7 @@ func (p *SimSensor) Run(statusUpdatingCh chan SensorModelStatus, sensorUpdating 
 					if respErr != nil {
 						fmt.Printf("ERROR %v\n\n", respErr.Error())
 					} else {
-						fmt.Printf("\nGiving response %v\n", respPack.ToString())
+						fmt.Printf("\nGiving response %s\n", respPack)
 						trashed := p.Model.Connectivity.TrashSignal(respPack)
 						fmt.Printf("Trashed=%X (%v bytes) to out %v/%v\n", trashed, len(trashed), len(p.Output), cap(p.Output))
 						p.Output <- trashed
