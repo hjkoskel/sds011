@@ -1,4 +1,4 @@
-module sds011
+module github.com/hjkoskel/sds011
 
 go 1.23.2
 
